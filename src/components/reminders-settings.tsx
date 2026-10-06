@@ -1,0 +1,32 @@
+"use client";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { Bell, Copy, Mail, Save, ShieldCheck, Sun, Moon } from "lucide-react";
+import { toast } from "sonner";
+import { useBook } from "@/components/book-context";
+import { PageHeading } from "@/components/dashboard";
+import { IntegrationsSettings } from "@/components/integrations-settings";
+import { Button } from "@/components/ui/button";
+import { Avatar, Badge, EmptyState, ErrorState, Field, LoadingSkeleton, SubmitButton } from "@/components/ui/common";
+import { mutate, useResource } from "@/lib/client";
+import { dateLabel, localDate, money } from "@/lib/utils";
+import type { Debt, Profile } from "@/lib/types";
+
+export function Reminders() {
+  const book = useBook();
+  const resource = useResource<{ items: Debt[]; reminderDays: number }>("/api/book?resource=reminders", book.revision);
+  return <><PageHeading title="Nhắc thanh toán" description="Một lời nhắc đúng lúc, một việc bớt phải nhớ." /><div className="info-banner"><Bell size={19} /><span>DinkBit nhắc trong ứng dụng trước hạn {resource.data?.reminderDays || 3} ngày. <Link href="/settings">Thay đổi cài đặt</Link></span></div>{resource.loading ? <LoadingSkeleton /> : resource.error ? <ErrorState message={resource.error} retry={resource.reload} /> : resource.data && (resource.data.items.length ? <div className="reminders-grid">{resource.data.items.map((debt) => {
+    const days = Math.round((new Date(debt.dueDate!).getTime() - new Date(localDate()).getTime()) / 86400000);
+    const message = `Chào ${debt.contact.name}, nhắc bạn về khoản "${debt.title}" còn ${money(debt.remainingAmount)}, hạn thanh toán ${dateLabel(debt.dueDate)}. Cảm ơn bạn!`;
+    return <article className="panel reminder-card" key={debt.id}><div className="debt-card-head"><Link href={`/debts/${debt.id}`} className="person-cell"><Avatar name={debt.contact.name} /><span><strong>{debt.contact.name}</strong><small>{debt.title}</small></span></Link><Badge status={days < 0 ? "OVERDUE" : "ACTIVE"} /></div><strong className="reminder-amount">{money(debt.remainingAmount)}</strong><p className={days < 0 ? "negative" : "muted"}>{days < 0 ? `Quá hạn ${Math.abs(days)} ngày` : days === 0 ? "Đến hạn hôm nay" : `Còn ${days} ngày`} · {dateLabel(debt.dueDate)}</p>{debt.reminders?.map((reminder) => <p key={reminder.id} className="subtle-label">Đã đặt nhắc: {dateLabel(reminder.reminderDate)}</p>)}<div className="reminder-actions"><Button variant="secondary" size="small" onClick={() => book.remind(debt)}><Bell size={14} />Nhắc tôi</Button>{debt.type === "RECEIVABLE" && <><Button variant="secondary" size="small" onClick={async () => { try { await navigator.clipboard.writeText(message); toast.success("Đã sao chép lời nhắc để bạn gửi"); } catch { toast.error("Trình duyệt không cho phép sao chép."); } }}><Copy size={14} />Sao chép lời nhắc</Button>{debt.contact.email && <a className="button button-secondary button-small" href={`mailto:${encodeURIComponent(debt.contact.email)}?subject=${encodeURIComponent("Nhắc thanh toán công nợ")}&body=${encodeURIComponent(message)}`}><Mail size={14} />Soạn email</a>}</>}</div></article>;
+  })}</div> : <EmptyState title="Không có khoản cần nhắc" description="Các khoản sắp đến hạn trong 7 ngày và quá hạn sẽ hiển thị ở đây." />)}</>;
+}
+export function Settings() {
+  const book = useBook(), resource = useResource<Profile>("/api/book?resource=settings", book.revision);
+  return <><PageHeading title="Cài đặt" description="Thiết lập không gian công nợ theo cách của bạn." />{resource.loading ? <LoadingSkeleton /> : resource.error ? <ErrorState message={resource.error} retry={resource.reload} /> : resource.data && <SettingsForm key={`${resource.data.name}:${resource.data.reminderDays}`} profile={resource.data} />}<IntegrationsSettings /></>;
+}
+function SettingsForm({ profile }: { profile: Profile }) {
+  const book = useBook(), router = useRouter(), [name, setName] = useState(profile.name || ""), [reminderDays, setReminderDays] = useState(profile.reminderDays), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  return <div className="settings-grid"><section className="panel"><div className="panel-heading"><div><h2>Thông tin cá nhân</h2><p>Chỉ bạn mới truy cập được dữ liệu của mình</p></div><ShieldCheck size={21} className="positive" /></div><form className="form-stack" onSubmit={async (event) => { event.preventDefault(); setBusy(true); setError(""); try { await mutate("settings.update", { name, reminderDays }); toast.success("Đã lưu cài đặt"); book.refresh(); router.refresh(); } catch (failure) { setError((failure as Error).message); } finally { setBusy(false); } }}><Field label="Họ và tên" htmlFor="settings-name"><input id="settings-name" required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label="Email đăng nhập" htmlFor="settings-email"><input id="settings-email" value={profile.email} disabled /></Field><Field label="Nhắc trước hạn" htmlFor="settings-reminder"><select id="settings-reminder" value={reminderDays} onChange={(event) => setReminderDays(Number(event.target.value))}>{[1, 3, 7].map((days) => <option key={days} value={days}>Trước {days} ngày</option>)}</select></Field>{error && <p className="form-error" role="alert">{error}</p>}<SubmitButton loading={busy}><Save size={16} />Lưu thay đổi</SubmitButton></form></section><div><section className="panel"><div className="panel-heading"><div><h2>Giao diện</h2><p>Lựa chọn được lưu trên thiết bị này</p></div></div><div className="theme-options">{[{ label: "Sáng", value: "light", icon: Sun }, { label: "Tối", value: "dark", icon: Moon }].map((theme) => <Button key={theme.value} variant="secondary" onClick={() => { localStorage.setItem("debtbook-theme", theme.value); document.documentElement.classList.toggle("dark", theme.value === "dark"); window.dispatchEvent(new Event("debtbook-theme")); }}><theme.icon size={17} />{theme.label}</Button>)}</div></section><section className="panel"><h2>Ngôn ngữ & tiền tệ</h2><dl className="detail-stats"><div><dt>Ngôn ngữ</dt><dd>Tiếng Việt</dd></div><div><dt>Tiền tệ</dt><dd>VND (₫)</dd></div><div><dt>Múi giờ hiển thị</dt><dd>Việt Nam (UTC+7)</dd></div></dl><p className="muted">Mật khẩu có thể đặt lại qua email tại trang đăng nhập.</p><Link className="text-link" href="/forgot-password">Đặt lại mật khẩu</Link></section></div></div>;
+}

@@ -1,0 +1,45 @@
+"use client";
+import dynamic from "next/dynamic";
+import Link from "next/link";
+import { ArrowDownLeft, ArrowRight, ArrowUpRight, CalendarDays, CircleAlert, Plus, Wallet, Download, Printer, TrendingUp } from "lucide-react";
+import { toast } from "sonner";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Avatar, Badge, EmptyState, ErrorState, LoadingSkeleton } from "@/components/ui/common";
+import { DebtTable } from "@/components/debt-table";
+import { useBook } from "@/components/book-context";
+import { useResource } from "@/lib/client";
+import { cn, dateLabel, localDate, money } from "@/lib/utils";
+import type { Overview, Totals } from "@/lib/types";
+const BalanceChart = dynamic(() => import("@/components/charts").then((module) => module.BalanceChart), { ssr: false, loading: () => <div className="skeleton balance-chart" /> });
+const DistributionChart = dynamic(() => import("@/components/charts").then((module) => module.DistributionChart), { ssr: false, loading: () => <div className="skeleton donut-chart" /> });
+
+export function SummaryCards({ totals }: { totals: Totals }) {
+  const cards = [{ title: "HỌ NỢ TÔI", amount: totals.receivable, icon: ArrowDownLeft, color: "green", note: `${totals.receivablePeople} người đang nợ bạn`, href: "/debts?type=RECEIVABLE" }, { title: "TÔI ĐANG NỢ", amount: totals.payable, icon: ArrowUpRight, color: "red", note: `${totals.payablePeople} người bạn đang nợ`, href: "/debts?type=PAYABLE" }, { title: "TỔNG CÔNG NỢ", amount: totals.receivable + totals.payable, icon: Wallet, color: "blue", note: `Số dư ròng: ${money(totals.receivable - totals.payable)}`, href: "/debts" }, { title: "CÔNG NỢ QUÁ HẠN", amount: totals.overdue, icon: CircleAlert, color: "orange", note: `${totals.overdueCount} khoản cần lưu ý`, href: "/debts?status=OVERDUE" }];
+  return <div className="summary-grid">{cards.map((card) => <Link className={cn("summary-card", `summary-${card.color}`)} key={card.title} href={card.href}><div className="summary-top"><span>{card.title}</span><span className="summary-icon"><card.icon size={19} /></span></div><strong className="summary-amount">{money(card.amount)}</strong><div className="summary-bottom"><span>{card.note}</span><ArrowUpRight size={14} /></div></Link>)}</div>;
+}
+export function PageHeading({ title, description, children }: { title: string; description: string; children?: React.ReactNode }) { return <div className="page-heading"><div><h1>{title}</h1><p>{description}</p></div><div className="page-actions">{children}</div></div>; }
+export function DateRangePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) { return <div className="date-range"><CalendarDays size={16} /><select aria-label="Khoảng thời gian biểu đồ" value={value} onChange={(event) => onChange(event.target.value)}>{[[7, "7 ngày"], [30, "30 ngày"], [90, "3 tháng"], [180, "6 tháng"], [365, "1 năm"]].map(([days, label]) => <option key={days} value={days}>{label} gần đây</option>)}</select></div>; }
+async function downloadExport(format: "csv" | "xlsx", from: string, to: string) {
+  try {
+    const response = await fetch(`/api/export?format=${format}&from=${from}&to=${to}`);
+    if (!response.ok) { const data = await response.json(); throw new Error(data.error); }
+    const url = URL.createObjectURL(await response.blob()), anchor = document.createElement("a");
+    anchor.href = url; anchor.download = `dinkbit-${localDate()}.${format}`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { toast.error((error as Error).message); }
+}
+export function Dashboard({ name, reports = false }: { name: string; reports?: boolean }) {
+  const book = useBook(), [days, setDays] = useState("30"), [custom, setCustom] = useState(false), [from, setFrom] = useState(localDate()), [to, setTo] = useState(localDate());
+  const resource = useResource<Overview>(`/api/book?resource=${reports ? "reports" : "overview"}&${custom ? `from=${from}&to=${to}` : `days=${days}`}`, book.revision);
+  const end = custom ? to : localDate(), start = custom ? from : new Date(new Date(end).getTime() - (Number(days) - 1) * 86400000).toISOString().slice(0, 10);
+  return <><PageHeading title={reports ? "Báo cáo công nợ" : `Chào ${name.split(" ").at(-1) || "bạn"} 👋`} description={reports ? "Nhìn lại dòng tiền. Chủ động cho những kế hoạch tiếp theo." : "Một góc nhìn rõ ràng về công nợ của bạn hôm nay."}><DateRangePicker value={days} onChange={(value) => { setDays(value); setCustom(false); }} />{reports ? <Button variant="secondary" onClick={() => setCustom(!custom)}>Tùy chọn ngày</Button> : <Button onClick={() => book.addDebt()}><Plus size={17} />Thêm công nợ</Button>}</PageHeading>
+    {reports && <div className="report-toolbar no-print">{custom && <><label>Từ <input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} /></label><label>Đến <input type="date" value={to} min={from} max={localDate()} onChange={(event) => setTo(event.target.value)} /></label></>}<span>Xuất công nợ tạo trong kỳ: {dateLabel(start)} – {dateLabel(end)}</span><Button variant="secondary" size="small" onClick={() => downloadExport("csv", start, end)}><Download size={15} />CSV</Button><Button variant="secondary" size="small" onClick={() => downloadExport("xlsx", start, end)}><Download size={15} />Excel</Button><Button variant="secondary" size="small" onClick={() => window.print()}><Printer size={15} />In / PDF</Button></div>}
+    {resource.loading ? <LoadingSkeleton /> : resource.error ? <ErrorState message={resource.error} retry={resource.reload} /> : resource.data && <><SummaryCards totals={resource.data.totals} />
+      {!reports && <div className="insight-strip"><span className="insight-symbol"><TrendingUp size={17} /></span><p><strong>Công nợ trong tầm tay.</strong> Bạn đã thu {money(resource.data.cashflow.collected)} và trả {money(resource.data.cashflow.repaid)} trong kỳ này.</p><Link href="/reports">Xem báo cáo <ArrowRight size={15} /></Link></div>}
+      {reports && <div className="report-metrics">{[["Tổng đã cho vay (mọi thời điểm)", resource.data.totals.lent], ["Đã thu trong kỳ", resource.data.cashflow.collected], ["Chờ thu hiện tại", resource.data.totals.receivable], ["Đã trả trong kỳ", resource.data.cashflow.repaid]].map(([label, value]) => <div className="panel" key={label}><span>{label}</span><strong>{money(Number(value))}</strong></div>)}</div>}
+      <div className="chart-grid"><section className="panel"><div className="panel-heading"><div><h2>Công nợ theo thời gian</h2><p>Số dư còn lại tại từng thời điểm</p></div><span className="subtle-label">VND</span></div><div className="line-legend"><span><i className="dot-blue" />Họ nợ tôi</span><span><i className="dot-orange" />Tôi nợ họ</span></div><BalanceChart points={resource.data.points} /></section><section className="panel distribution-panel"><div className="panel-heading"><div><h2>Phân bổ công nợ</h2><p>Tổng số dư và thanh toán tích lũy</p></div></div><DistributionChart totals={resource.data.totals} /></section></div>
+      {reports ? <section className="panel"><div className="panel-heading"><div><h2>Người đang nợ nhiều nhất</h2><p>Số dư phải thu hiện tại, không bao gồm công nợ đã đóng</p></div></div>{resource.data.top.length ? <div className="top-contacts">{resource.data.top.map((contact) => <Link href={`/contacts/${contact.id}`} key={contact.id}><Avatar name={contact.name} /><div><strong>{contact.name}</strong><div className="progress-track"><span style={{ width: `${contact.remaining / resource.data!.top[0].remaining * 100}%` }} /></div></div><strong>{money(contact.remaining)}</strong></Link>)}</div> : <EmptyState title="Chưa có khoản phải thu" description="Báo cáo sẽ cập nhật khi bạn thêm công nợ." />}</section> : <><section className="panel table-panel"><div className="panel-heading"><div><h2>Công nợ gần đây</h2><p>Những khoản tiền bạn vừa ghi nhận</p></div><Link className="text-link" href="/debts">Xem tất cả <ArrowRight size={15} /></Link></div><DebtTable items={resource.data.recent} compact /></section><section className="panel"><div className="panel-heading"><div><h2>Sắp đến hạn & quá hạn</h2><p>Đừng để những khoản nhỏ trở thành nỗi lo lớn</p></div><Link className="text-link" href="/reminders">Quản lý nhắc nhở <ArrowRight size={15} /></Link></div>{resource.data.due.length ? <div className="due-grid">{resource.data.due.map((debt) => <Link href={`/debts/${debt.id}`} className="due-card" key={debt.id}><div className="person-cell"><Avatar name={debt.contact.name} /><span><strong>{debt.contact.name}</strong><small>{debt.title}</small></span></div><strong>{money(debt.remainingAmount)}</strong><div><span>Hạn {dateLabel(debt.dueDate)}</span><Badge status={debt.status === "OVERDUE" ? "OVERDUE" : "ACTIVE"} /></div></Link>)}</div> : <EmptyState title="Không có công nợ sắp đến hạn" description="Mọi thứ đang trong tầm kiểm soát." />}</section></>}
+      <footer className="content-footer"><span>DinkBit · Ghi chép rõ ràng, an tâm mỗi ngày.</span><span>Tiền tệ: VND · Số dư hiện tại</span></footer>
+    </>}
+  </>;
+}
